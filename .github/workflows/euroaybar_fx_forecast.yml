@@ -1,0 +1,32 @@
+name: EuroAybar Daily FX Forecast
+
+on:
+  schedule:
+    # 13:00 UTC = 18:00 Almaty
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+jobs:
+  publish_fx_forecast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run EuroAybar FX forecast
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          MODE: "fx_forecast"
+          DRY_RUN: "false"
+        run: python main.py
