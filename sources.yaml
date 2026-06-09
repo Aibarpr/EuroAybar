@@ -1,0 +1,35 @@
+# EuroAybar source registry
+# Prefer official RSS/API sources. Add paid feeds/APIs later: Bloomberg, FT, The Economist, Reuters Connect, KASE data feed.
+feeds:
+  - name: National Bank of Kazakhstan RSS
+    url: https://nationalbank.kz/en/rss/news
+    region: KZ
+    weight: 5
+  - name: National Bank of Kazakhstan Press Releases
+    url: https://nationalbank.kz/en/news/press-relizy
+    region: KZ
+    weight: 5
+  - name: KASE Market and Company News
+    url: https://kase.kz/en/information/news/all/
+    region: KZ
+    weight: 5
+  - name: Ministry of Finance Kazakhstan
+    url: https://www.gov.kz/memleket/entities/minfin?lang=en
+    region: KZ
+    weight: 4
+  - name: IMF News
+    url: https://www.imf.org/en/News/RSS
+    region: GLOBAL
+    weight: 4
+  - name: World Bank Kazakhstan
+    url: https://www.worldbank.org/en/country/kazakhstan
+    region: GLOBAL_KZ
+    weight: 4
+  - name: Reuters Business
+    url: https://www.reuters.com/business/
+    region: GLOBAL
+    weight: 5
+  - name: Reuters Markets
+    url: https://www.reuters.com/markets/
+    region: GLOBAL
+    weight: 5
