@@ -1,35 +1,226 @@
 # EuroAybar source registry
-# Prefer official RSS/API sources. Add paid feeds/APIs later: Bloomberg, FT, The Economist, Reuters Connect, KASE data feed.
+# Логика весов:
+# 5 = приоритетные источники для Казахстана, ставок, тенге, рынка капитала
+# 4 = важные глобальные центробанки и международные институты
+# 3 = рыночный фон: акции, нефть, валюты, облигации, commodities
+# 2 = дополнительный деловой фон
+
 feeds:
-  - name: National Bank of Kazakhstan RSS
-    url: https://nationalbank.kz/en/rss/news
-    region: KZ
-    weight: 5
+  # -------------------------
+  # KAZAKHSTAN: official / market
+  # -------------------------
+
   - name: National Bank of Kazakhstan Press Releases
     url: https://nationalbank.kz/en/news/press-relizy
     region: KZ
     weight: 5
+
+  - name: National Bank of Kazakhstan News
+    url: https://nationalbank.kz/en/news
+    region: KZ
+    weight: 5
+
   - name: KASE Market and Company News
     url: https://kase.kz/en/information/news/all/
     region: KZ
     weight: 5
+
+  - name: KASE Main News
+    url: https://kase.kz/en/
+    region: KZ
+    weight: 5
+
   - name: Ministry of Finance Kazakhstan
     url: https://www.gov.kz/memleket/entities/minfin?lang=en
     region: KZ
     weight: 4
+
+  - name: Bureau of National Statistics Kazakhstan
+    url: https://stat.gov.kz/en/
+    region: KZ
+    weight: 4
+
+  - name: Agency for Regulation and Development of Financial Market
+    url: https://www.gov.kz/memleket/entities/ardfm?lang=en
+    region: KZ
+    weight: 4
+
+  - name: Astana International Financial Centre
+    url: https://aifc.kz/news/
+    region: KZ
+    weight: 4
+
+  - name: Astana International Exchange
+    url: https://aix.kz/
+    region: KZ
+    weight: 4
+
+  - name: Kazakhstan Government News
+    url: https://www.gov.kz/memleket/entities/primeminister?lang=en
+    region: KZ
+    weight: 3
+
+  # -------------------------
+  # CENTRAL BANKS / POLICY
+  # -------------------------
+
+  - name: Federal Reserve All Press Releases
+    url: https://www.federalreserve.gov/feeds/press_all.xml
+    region: US
+    weight: 5
+
+  - name: Federal Reserve Monetary Policy
+    url: https://www.federalreserve.gov/feeds/press_monetary.xml
+    region: US
+    weight: 5
+
+  - name: Federal Reserve Speeches
+    url: https://www.federalreserve.gov/feeds/speeches.xml
+    region: US
+    weight: 4
+
+  - name: European Central Bank Press
+    url: https://www.ecb.europa.eu/rss/press.html
+    region: EU
+    weight: 5
+
+  - name: European Central Bank Blog
+    url: https://www.ecb.europa.eu/rss/blog.html
+    region: EU
+    weight: 4
+
+  - name: European Central Bank Publications
+    url: https://www.ecb.europa.eu/rss/pub.html
+    region: EU
+    weight: 4
+
+  - name: Bank of England News
+    url: https://www.bankofengland.co.uk/news
+    region: UK
+    weight: 4
+
+  - name: Bank of Japan News
+    url: https://www.boj.or.jp/en/about/press/index.htm
+    region: JP
+    weight: 4
+
+  # -------------------------
+  # MULTILATERAL INSTITUTIONS
+  # -------------------------
+
   - name: IMF News
-    url: https://www.imf.org/en/News/RSS
+    url: https://www.imf.org/en/news
     region: GLOBAL
     weight: 4
+
+  - name: IMF Blog
+    url: https://www.imf.org/en/blogs
+    region: GLOBAL
+    weight: 4
+
+  - name: World Bank News
+    url: https://www.worldbank.org/en/news/all
+    region: GLOBAL
+    weight: 4
+
   - name: World Bank Kazakhstan
     url: https://www.worldbank.org/en/country/kazakhstan
     region: GLOBAL_KZ
     weight: 4
-  - name: Reuters Business
-    url: https://www.reuters.com/business/
+
+  - name: BIS Press Releases
+    url: https://www.bis.org/list/press_releases/index.rss
     region: GLOBAL
-    weight: 5
-  - name: Reuters Markets
-    url: https://www.reuters.com/markets/
+    weight: 4
+
+  - name: BIS Speeches
+    url: https://www.bis.org/list/speeches/index.rss
     region: GLOBAL
-    weight: 5
+    weight: 4
+
+  - name: OECD Newsroom
+    url: https://www.oecd.org/newsroom/
+    region: GLOBAL
+    weight: 3
+
+  # -------------------------
+  # GLOBAL MARKETS / BUSINESS MEDIA
+  # -------------------------
+
+  - name: MarketWatch Top Stories
+    url: https://feeds.marketwatch.com/marketwatch/topstories/
+    region: GLOBAL_MARKETS
+    weight: 3
+
+  - name: MarketWatch MarketPulse
+    url: https://feeds.marketwatch.com/marketwatch/marketpulse/
+    region: GLOBAL_MARKETS
+    weight: 3
+
+  - name: MarketWatch Real Time Headlines
+    url: https://feeds.marketwatch.com/marketwatch/realtimeheadlines/
+    region: GLOBAL_MARKETS
+    weight: 3
+
+  - name: Investing.com Latest News
+    url: https://www.investing.com/rss/news.rss
+    region: GLOBAL_MARKETS
+    weight: 3
+
+  - name: Investing.com Forex News
+    url: https://www.investing.com/rss/forex.rss
+    region: FX
+    weight: 3
+
+  - name: Investing.com Stock Market News
+    url: https://www.investing.com/rss/stock.rss
+    region: EQUITIES
+    weight: 3
+
+  - name: Investing.com Commodities News
+    url: https://www.investing.com/rss/commodities.rss
+    region: COMMODITIES
+    weight: 3
+
+  - name: Yahoo Finance News
+    url: https://finance.yahoo.com/news/
+    region: GLOBAL_MARKETS
+    weight: 3
+
+  - name: Nasdaq News
+    url: https://www.nasdaq.com/news-and-insights
+    region: GLOBAL_MARKETS
+    weight: 3
+
+  # -------------------------
+  # ENERGY / OIL / COMMODITIES
+  # -------------------------
+
+  - name: OPEC News
+    url: https://www.opec.org/opec_web/en/press_room/news.htm
+    region: OIL
+    weight: 4
+
+  - name: IEA News
+    url: https://www.iea.org/news
+    region: ENERGY
+    weight: 4
+
+  - name: U.S. Energy Information Administration
+    url: https://www.eia.gov/todayinenergy/
+    region: ENERGY
+    weight: 3
+
+  # -------------------------
+  # REGIONAL CONTEXT
+  # -------------------------
+
+  - name: Eurasian Development Bank
+    url: https://eabr.org/en/press/news/
+    region: EURASIA
+    weight: 4
+
+  - name: Eurasian Economic Commission
+    url: https://eec.eaeunion.org/en/news/
+    region: EURASIA
+    weight: 3
