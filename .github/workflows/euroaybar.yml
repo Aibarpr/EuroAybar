@@ -2,9 +2,7 @@ name: EuroAybar Auto Publisher
 
 on:
   schedule:
-    # Каждые 2 часа на 17-й минуте по UTC.
-    # Для Алматы это будет примерно 05:17, 07:17, 09:17, 11:17, 13:17, 15:17, 17:17 и т.д.
-    - cron: '17 */2 * * *'
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 jobs:
