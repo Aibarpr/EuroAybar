@@ -2,7 +2,9 @@ name: EuroAybar Auto Publisher
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    # Каждые 2 часа на 17-й минуте по UTC.
+    # Для Алматы это будет примерно 05:17, 07:17, 09:17, 11:17, 13:17, 15:17, 17:17 и т.д.
+    - cron: '17 */2 * * *'
   workflow_dispatch:
 
 jobs:
@@ -26,5 +28,6 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          MODE: "news"
           DRY_RUN: "false"
         run: python main.py
