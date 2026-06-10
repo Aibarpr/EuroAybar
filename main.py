@@ -1,488 +1,485 @@
 import os
-import re
+import sys
 import time
-import yaml
-import html
-import random
 import logging
 import requests
-import feedparser
-from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
+from bs4 import BeautifulSoup
 from openai import OpenAI
 
 
 # =========================
-# EuroAybar configuration
+# BASIC SETTINGS
 # =========================
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ALMATY_TZ = timezone(timedelta(hours=5))
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
-MODE = os.getenv("MODE", "news")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-SOURCES_FILE = os.getenv("SOURCES_FILE", "sources.yaml")
+REQUEST_TIMEOUT = 20
+OPENAI_TIMEOUT = 60
 
-MAX_ITEMS = int(os.getenv("MAX_ITEMS", "14"))
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
-
-FINAL_LINE = "Айбар Олжаевтың болжамды посттары. Жазылыңыз https://t.me/euroaybar"
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+FINAL_PARAGRAPH = (
+    "\n\n"
+    "Айбар Олжаевтың болжамды посттары. "
+    "Жазылыңыз https://t.me/euroaybar"
+)
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
 
 # =========================
-# Basic helpers
+# SOURCE LIST
 # =========================
 
-def clean_text(text: str) -> str:
-    if not text:
-        return ""
-    text = html.unescape(text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def normalize_url(url: str) -> str:
-    return (url or "").strip()
-
-
-def now_almaty() -> str:
-    almaty_tz = timezone(timedelta(hours=5))
-    return datetime.now(almaty_tz).strftime("%Y-%m-%d %H:%M:%S Алматы уақыты")
-
-
-def load_sources() -> list:
-    if not os.path.exists(SOURCES_FILE):
-        logging.warning("sources.yaml not found. Using fallback sources.")
-        return fallback_sources()
-
-    with open(SOURCES_FILE, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    # Supports both formats:
-    # feeds:
-    #   - name: ...
-    # sources:
-    #   - name: ...
-    feeds = data.get("feeds") or data.get("sources") or []
-    if not feeds:
-        logging.warning("No feeds found in sources.yaml. Using fallback sources.")
-        return fallback_sources()
-
-    return feeds
-
-
-def fallback_sources() -> list:
-    return [
-        {
-            "name": "KASE Market and Company News",
-            "url": "https://kase.kz/en/information/news/all/",
-            "region": "KZ",
-            "weight": 5,
-        },
-        {
-            "name": "Federal Reserve All Press Releases",
-            "url": "https://www.federalreserve.gov/feeds/press_all.xml",
-            "region": "US",
-            "weight": 5,
-        },
-        {
-            "name": "European Central Bank Press",
-            "url": "https://www.ecb.europa.eu/rss/press.html",
-            "region": "EU",
-            "weight": 5,
-        },
-        {
-            "name": "BIS Press Releases",
-            "url": "https://www.bis.org/list/press_releases/index.rss",
-            "region": "GLOBAL",
-            "weight": 4,
-        },
-        {
-            "name": "MarketWatch Top Stories",
-            "url": "https://feeds.marketwatch.com/marketwatch/topstories/",
-            "region": "GLOBAL_MARKETS",
-            "weight": 3,
-        },
-        {
-            "name": "Investing.com Latest News",
-            "url": "https://www.investing.com/rss/news.rss",
-            "region": "GLOBAL_MARKETS",
-            "weight": 3,
-        },
-    ]
-
-
-# =========================
-# Source collection
-# =========================
-
-def fetch_rss(source: dict) -> list:
-    url = normalize_url(source.get("url"))
-    name = source.get("name", "Unknown source")
-    weight = int(source.get("weight", 3))
-    region = source.get("region", "")
-
-    parsed = feedparser.parse(url)
-    items = []
-
-    for entry in parsed.entries[:10]:
-        title = clean_text(entry.get("title", ""))
-        summary = clean_text(entry.get("summary", "") or entry.get("description", ""))
-        link = entry.get("link", "")
-
-        if not title:
-            continue
-
-        items.append({
-            "source": name,
-            "region": region,
-            "weight": weight,
-            "title": title,
-            "summary": summary[:600],
-            "url": link,
-        })
-
-    return items
-
-
-def fetch_web_page(source: dict) -> list:
-    url = normalize_url(source.get("url"))
-    name = source.get("name", "Unknown source")
-    weight = int(source.get("weight", 3))
-    region = source.get("region", "")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 EuroAybarBot/1.0 financial media research"
-    }
-
-    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-
-    candidates = []
-
-    # Collect visible headings and meaningful links
-    for element in soup.find_all(["h1", "h2", "h3", "a"]):
-        text = clean_text(element.get_text(" "))
-        if len(text) < 25:
-            continue
-        if len(text) > 220:
-            text = text[:220]
-
-        link = element.get("href", "")
-        if link and link.startswith("/"):
-            base = re.match(r"^https?://[^/]+", url)
-            if base:
-                link = base.group(0) + link
-
-        candidates.append({
-            "source": name,
-            "region": region,
-            "weight": weight,
-            "title": text,
-            "summary": "",
-            "url": link or url,
-        })
-
-    # Deduplicate by title
-    seen = set()
-    unique = []
-    for item in candidates:
-        key = item["title"].lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(item)
-
-    return unique[:10]
-
-
-def fetch_source(source: dict) -> list:
-    url = normalize_url(source.get("url"))
-
-    try:
-        if url.endswith(".xml") or url.endswith(".rss") or "rss" in url.lower() or "feeds." in url.lower():
-            items = fetch_rss(source)
-        else:
-            # Try RSS parser first anyway; if empty, use page parser
-            rss_items = fetch_rss(source)
-            items = rss_items if rss_items else fetch_web_page(source)
-
-        logging.info("Source OK: %s | items=%s", source.get("name"), len(items))
-        return items
-
-    except Exception as e:
-        logging.warning("Source failed: %s: %s", source.get("name"), str(e))
-        return []
-
-
-def collect_items() -> list:
-    sources = load_sources()
-    all_items = []
-
-    for source in sources:
-        items = fetch_source(source)
-        all_items.extend(items)
-        time.sleep(0.3)
-
-    if not all_items:
-        logging.warning("No source items collected.")
-        return []
-
-    filtered = []
-    keywords = [
-        "rate", "inflation", "tenge", "dollar", "oil", "brent", "bond",
-        "market", "bank", "central bank", "fed", "ecb", "imf", "world bank",
-        "kazakhstan", "kase", "currency", "yield", "debt", "budget",
-        "growth", "gdp", "trade", "export", "import", "recession",
-        "monetary", "finance", "stock", "commodities", "gold", "rub"
-    ]
-
-    for item in all_items:
-        text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
-        score = int(item.get("weight", 3))
-
-        for kw in keywords:
-            if kw in text:
-                score += 2
-
-        item["score"] = score
-        filtered.append(item)
-
-    filtered.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    # Small shuffle among top items so channel is not repetitive
-    top = filtered[:25]
-    random.shuffle(top)
-    top.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    selected = top[:MAX_ITEMS]
-    logging.info("Collected total=%s | selected=%s", len(all_items), len(selected))
-    return selected
-
-
-def format_items_for_prompt(items: list) -> str:
-    if not items:
-        return "Нарықтық дерек аз. Жалпы қаржы нарығы бойынша сақ аналитикалық пост жаз."
-
-    lines = []
-    for i, item in enumerate(items, start=1):
-        title = item.get("title", "")
-        source = item.get("source", "")
-        region = item.get("region", "")
-        summary = item.get("summary", "")
-        url = item.get("url", "")
-
-        lines.append(
-            f"{i}. Source: {source} | Region: {region}\n"
-            f"Title: {title}\n"
-            f"Summary: {summary}\n"
-            f"URL: {url}\n"
-        )
-
-    return "\n".join(lines)
+SOURCES = [
+    {
+        "name": "KASE Main News",
+        "url": "https://kase.kz/ru/news/",
+    },
+    {
+        "name": "Ministry of Finance Kazakhstan",
+        "url": "https://www.gov.kz/memleket/entities/minfin/press/news",
+    },
+    {
+        "name": "Bureau of National Statistics Kazakhstan",
+        "url": "https://stat.gov.kz/ru/news/",
+    },
+    {
+        "name": "Agency for Regulation and Development of Financial Market",
+        "url": "https://www.gov.kz/memleket/entities/ardfm/press/news",
+    },
+    {
+        "name": "National Bank of Kazakhstan",
+        "url": "https://nationalbank.kz/ru/news",
+    },
+    {
+        "name": "Kazakhstan Government News",
+        "url": "https://primeminister.kz/ru/news",
+    },
+    {
+        "name": "Federal Reserve Press Releases",
+        "url": "https://www.federalreserve.gov/newsevents/pressreleases.htm",
+    },
+    {
+        "name": "Federal Reserve Monetary Policy",
+        "url": "https://www.federalreserve.gov/monetarypolicy.htm",
+    },
+    {
+        "name": "European Central Bank Press",
+        "url": "https://www.ecb.europa.eu/press/html/index.en.html",
+    },
+    {
+        "name": "Bank of England News",
+        "url": "https://www.bankofengland.co.uk/news",
+    },
+    {
+        "name": "Bank of Japan News",
+        "url": "https://www.boj.or.jp/en/about/press/index.htm",
+    },
+    {
+        "name": "IMF News",
+        "url": "https://www.imf.org/en/News",
+    },
+    {
+        "name": "IMF Blog",
+        "url": "https://www.imf.org/en/Blogs",
+    },
+    {
+        "name": "World Bank News",
+        "url": "https://www.worldbank.org/en/news",
+    },
+    {
+        "name": "BIS Press Releases",
+        "url": "https://www.bis.org/press/",
+    },
+    {
+        "name": "MarketWatch Top Stories",
+        "url": "https://www.marketwatch.com/",
+    },
+    {
+        "name": "Investing.com Forex News",
+        "url": "https://www.investing.com/news/forex-news",
+    },
+    {
+        "name": "Investing.com Commodities News",
+        "url": "https://www.investing.com/news/commodities-news",
+    },
+    {
+        "name": "Yahoo Finance News",
+        "url": "https://finance.yahoo.com/news/",
+    },
+]
 
 
 # =========================
-# OpenAI generation
+# VALIDATION
 # =========================
 
-def enforce_final_line(text: str) -> str:
-    text = text.strip()
-
-    # Remove old hashtags / old endings if model adds them
-    text = re.sub(r"#EuroAybar", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"#Euroайбар", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text).strip()
-
-    # Keep paragraph breaks readable
-    text = text.replace("Айбарлық баға:", "\n\nАйбарлық баға:")
-    text = text.replace("Бұл инвестициялық кеңес емес", "\n\nБұл инвестициялық кеңес емес")
-
-    if FINAL_LINE not in text:
-        text = text.rstrip() + "\n\n" + FINAL_LINE
-    else:
-        # Ensure final line is actually final
-        text = text.replace(FINAL_LINE, "").strip()
-        text = text + "\n\n" + FINAL_LINE
-
-    return text.strip()
-
-
-def generate_news_post(items: list) -> str:
-    source_digest = format_items_for_prompt(items)
-
-    prompt = f"""
-Сен EuroАйбар атты Telegram қаржы-аналитикалық арнасының авторысың.
-Арна авторы — Айбар Олжаев. Стиль: қысқа, нақты, интеллектуалды, қаржы нарығын қарапайым адамға түсіндіретін, бірақ сараптамалық салмағы бар.
-
-Міндет:
-Төмендегі әлемдік және қазақстандық қаржы дереккөздерінен қысқа аналитикалық пост жаз.
-Пост қазақ тілінде болуы керек.
-Постта жай жаңалық емес, авторлық Айбарлық баға болуы керек.
-
-Қазіргі уақыт:
-{now_almaty()}
-
-Дереккөздер:
-{source_digest}
-
-Қатаң талаптар:
-- 700-1100 таңба.
-- Қазақ тілінде жаз.
-- Бірінші сөйлем ілмек болсын.
-- Факт пен авторлық бағаны ажырат.
-- Сыбыс немесе болжам болса, нақты белгіле.
-- Инвестициялық кеңес берме.
-- Дереккөз атауын табиғи түрде атап өт, бірақ URL қоспа.
-- #EuroAybar немесе басқа хэштег қоспа.
-- Посттың ең соңғы жолы дәл мына мәтін болсын:
-{FINAL_LINE}
-
-Формат:
-1) Қысқа ілмек.
-2) Негізгі факт.
-3) Қазақстанға немесе теңгеге/мұнайға/нарыққа ықпалы.
-4) "Айбарлық баға:" деген бөлек сөйлем.
-5) Соңғы жол: {FINAL_LINE}
-"""
-
-    response = client.responses.create(
-        model=MODEL,
-        input=prompt,
-    )
-
-    return enforce_final_line(response.output_text)
-
-
-def generate_fx_forecast(items: list) -> str:
-    source_digest = format_items_for_prompt(items)
-
-    prompt = f"""
-Сен EuroАйбар арнасының қаржы-валюта шолушысысың.
-Автор — Айбар Олжаев.
-
-Міндет:
-USD/KZT бойынша ертеңгі күнге авторлық болжам жаз.
-Бұл нақты инвестициялық кеңес емес, нарықтық факторларға сүйенген авторлық болжам болуы керек.
-
-Қазіргі уақыт:
-{now_almaty()}
-
-Қолдағы нарықтық және қаржы деректері:
-{source_digest}
-
-Талдауда ескер:
-- USD/KZT бағыты
-- Brent мұнайы
-- АҚШ долларының жаһандық күшеюі/әлсіреуі
-- ФРЖ/ЕОБ риторикасы
-- рубль факторы
-- Қазақстандағы ішкі валюта сұранысы
-- KASE, НБК, макро және нарық фоны
-- егер нақты сандық дерек жеткіліксіз болса, тым батыл нақты курс айтпа, сақ диапазон бер
-
-Қатаң талаптар:
-- Қазақ тілінде.
-- 900-1300 таңба.
-- Тақырып бірінші жолда болсын: USD/KZT бойынша ертеңгі Айбарлық болжам
-- Бірінші абзацта ертеңге күтілетін дәлізді көрсет. Мысалы: "Менің ертеңгі күтуім: доллар 000–000 теңге дәлізінде саудалануы мүмкін."
-- Дәліз тым кең болмасын, бірақ нақты дерек аз болса сақ бол.
-- "Айбарлық баға:" деген бөлек аналитикалық сөйлем болсын.
-- Міндетті түрде мына сөйлем болсын: Бұл инвестициялық кеңес емес, авторлық болжам.
-- #EuroAybar немесе басқа хэштег қоспа.
-- Посттың ең соңғы жолы дәл мына мәтін болсын:
-{FINAL_LINE}
-
-Маңызды:
-- Курсқа кепілдік берме.
-- "Міндетті түрде болады" деп жазба.
-- "Мүмкін", "ықтимал", "негізгі сценарий" деген сақ формулировкаларды қолдан.
-- Авторлық стиль салмақты болсын.
-"""
-
-    response = client.responses.create(
-        model=MODEL,
-        input=prompt,
-    )
-
-    text = response.output_text.strip()
-
-    if "Бұл инвестициялық кеңес емес, авторлық болжам." not in text:
-        text += "\n\nБұл инвестициялық кеңес емес, авторлық болжам."
-
-    return enforce_final_line(text)
-
-
-# =========================
-# Telegram sending
-# =========================
-
-def send_telegram(text: str) -> None:
-    if DRY_RUN:
-        logging.info("DRY_RUN=true. Telegram message not sent.")
-        print("\n--- GENERATED POST ---\n")
-        print(text)
-        return
+def validate_env():
+    missing = []
 
     if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is missing.")
+        missing.append("TELEGRAM_BOT_TOKEN")
 
     if not TELEGRAM_CHANNEL_ID:
-        raise RuntimeError("TELEGRAM_CHANNEL_ID is missing.")
+        missing.append("TELEGRAM_CHANNEL_ID")
+
+    if not OPENAI_API_KEY:
+        missing.append("OPENAI_API_KEY")
+
+    if missing:
+        raise RuntimeError(f"Missing GitHub Secrets: {', '.join(missing)}")
+
+
+# =========================
+# HTTP HELPERS
+# =========================
+
+def safe_get(url: str) -> str:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/125.0 Safari/537.36"
+        )
+    }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.text
+
+    except Exception as exc:
+        logging.warning("Source failed: %s | %s", url, exc)
+        return ""
+
+
+def extract_text_from_html(html: str, max_chars: int = 3500) -> str:
+    if not html:
+        return ""
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    for tag in soup(["script", "style", "noscript", "svg"]):
+        tag.decompose()
+
+    text = soup.get_text(separator=" ", strip=True)
+    text = " ".join(text.split())
+
+    return text[:max_chars]
+
+
+# =========================
+# COLLECT SOURCES
+# =========================
+
+def collect_sources() -> str:
+    logging.info("Start collecting sources")
+
+    chunks = []
+
+    for source in SOURCES:
+        name = source["name"]
+        url = source["url"]
+
+        html = safe_get(url)
+        text = extract_text_from_html(html)
+
+        if text:
+            logging.info("Source OK: %s | chars=%s", name, len(text))
+            chunks.append(f"### {name}\n{text}\nURL: {url}")
+        else:
+            logging.warning("Source EMPTY: %s", name)
+
+        time.sleep(0.5)
+
+    if not chunks:
+        raise RuntimeError("No source data collected")
+
+    logging.info("Sources collected: %s", len(chunks))
+
+    return "\n\n".join(chunks)
+
+
+# =========================
+# OPENAI
+# =========================
+
+def get_openai_client() -> OpenAI:
+    return OpenAI(
+        api_key=OPENAI_API_KEY,
+        timeout=OPENAI_TIMEOUT,
+    )
+
+
+def clean_post(text: str) -> str:
+    text = text.strip()
+
+    unwanted_phrases = [
+        "Айбар Олжаевтың болжамды посттары",
+        "Жазылыңыз https://t.me/euroaybar",
+        "https://t.me/euroaybar",
+        "@euroaybar"
+    ]
+
+    lines = text.splitlines()
+    cleaned_lines = []
+
+    for line in lines:
+        if any(phrase.lower() in line.lower() for phrase in unwanted_phrases):
+            continue
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines).strip()
+
+
+def add_final_paragraph(text: str) -> str:
+    text = clean_post(text)
+
+    max_telegram_length = 4096
+    reserve = len(FINAL_PARAGRAPH) + 50
+
+    if len(text) + reserve > max_telegram_length:
+        text = text[: max_telegram_length - reserve]
+        text = text.rsplit(" ", 1)[0].strip()
+
+    return text + FINAL_PARAGRAPH
+
+
+def generate_analytics_post(source_text: str) -> str:
+    logging.info("Start AI generation: analytics post")
+
+    client = get_openai_client()
+
+    prompt = f"""
+Сен Қазақстандағы қаржы, экономика және нарық тақырыптарын жазатын Telegram-арна авторысың.
+
+Міндет: бір аналитикалық пост жазу.
+
+Тіл талабы:
+- тек қазақша жаз;
+- орысша сөйлем қолданба;
+- ресми аударма сияқты ауыр қылма;
+- қазақша табиғи, қарапайым, түсінікті, бірақ қаржылық дәлдігі бар стиль керек;
+- сөйлемдер тым ұзақ болмасын.
+
+Стиль:
+- Айбарлық стиль;
+- қарапайым адам түсінетіндей жаз;
+- бірақ қаржы маманы оқыса да ұят болмайтын аналитика болсын;
+- тақырып нақты әрі тартымды болсын;
+- артық пафоссыз, бірақ ойы өткір болсын.
+
+Формат:
+- күшті тақырып қой;
+- 5-8 абзац жаз;
+- тақырыптан кейін бірден негізгі ойға көш;
+- Қазақстан, теңге, банктер, бюджет, мұнай, инфляция, базалық мөлшерлеме, әлемдік нарықтар контексін ескер;
+- дерек жоқ жерде нақты факт ойдан шығарма;
+- егер дерек әлсіз болса, нарықтық шолу форматында жаз;
+- markdown-кесте қолданба;
+- сілтеме қойма;
+- хэштег қоспа;
+- emoji қолданба;
+- өзіңді жасанды интеллект деп айтпа;
+- соңғы абзацқа канал туралы ештеңе жазба, оны жүйе өзі қосады.
+
+Маңызды:
+- материалдарда нақты цифр болса ғана цифр қолдан;
+- нақты дерек жоқ болса, "нарық үшін маңызды белгі", "инвесторлар үшін сигнал", "теңге үшін қысым/қолдау факторы" сияқты абайлы тұжырым жаса;
+- "анық өседі", "міндетті түрде құлайды" сияқты кесімді болжам айтпа.
+
+Материалдар:
+{source_text}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Сен қазақ тілінде қаржы-экономикалық Telegram аналитика жазатын авторсың.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        temperature=0.7,
+        max_tokens=1200,
+    )
+
+    text = response.choices[0].message.content.strip()
+
+    if not text:
+        raise RuntimeError("OpenAI returned empty analytics post")
+
+    text = add_final_paragraph(text)
+
+    logging.info("AI generation done: analytics post | chars=%s", len(text))
+
+    return text
+
+
+def generate_fx_forecast_post(source_text: str) -> str:
+    logging.info("Start AI generation: FX forecast post")
+
+    client = get_openai_client()
+
+    today_almaty = datetime.now(ALMATY_TZ).strftime("%d.%m.%Y")
+
+    prompt = f"""
+Сен Қазақстандағы қаржы және валюта нарығын түсіндіретін Telegram-арна авторысың.
+
+Міндет: {today_almaty} күніне арналған доллар/теңге бағамы бойынша күнделікті болжам пост жазу.
+
+Тіл талабы:
+- Айбарлық стиль;
+- қарапайым адам түсінетіндей жаз;
+- бірақ қаржы маманы оқыса да ұят болмайтын аналитика болсын;
+- тақырып нақты әрі тартымды болсын;
+- артық пафоссыз, бірақ ойы өткір болсын.
+
+Міндетті мазмұн:
+- тақырып қой;
+- 5-8 абзац жаз;
+- алдағы тәулікке USD/KZT бойынша күтілетін диапазон бер;
+- диапазонды тым нақты емес, сақтықпен бер;
+- диапазонды "базалық сценарий" деп түсіндір;
+- мұнай бағасы, доллар индексі, рубль, Ұлттық банк, базалық мөлшерлеме, валютаға сұраныс, бюджет/салық төлемдері, сыртқы нарық факторларын түсіндір;
+- Қазақстан ішіндегі факторларды бөлек атап өт;
+- сыртқы нарық факторларын бөлек түсіндір;
+- қорытындыда теңге үшін негізгі тәуекел мен негізгі қолдау факторын айт.
+
+Шектеулер:
+- дерек жоқ жерде нақты биржалық котировка ойдан шығарма;
+- болжамды үзілді-кесілді айтпа;
+- "теңге міндетті түрде нығаяды" немесе "доллар міндетті түрде қымбаттайды" деме;
+- markdown-кесте қолданба;
+- сілтеме қойма;
+- хэштег қоспа;
+- emoji қолданба;
+- өзіңді жасанды интеллект деп айтпа;
+- соңғы абзацқа канал туралы ештеңе жазба, оны жүйе өзі қосады.
+
+Материалдар:
+{source_text}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Сен қазақ тілінде USD/KZT бойынша күнделікті болжам жазатын қаржы сарапшысысың.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        temperature=0.65,
+        max_tokens=1300,
+    )
+
+    text = response.choices[0].message.content.strip()
+
+    if not text:
+        raise RuntimeError("OpenAI returned empty FX forecast post")
+
+    text = add_final_paragraph(text)
+
+    logging.info("AI generation done: FX forecast post | chars=%s", len(text))
+
+    return text
+
+
+# =========================
+# TELEGRAM
+# =========================
+
+def send_telegram_message(text: str):
+    logging.info("Start Telegram send")
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
     payload = {
         "chat_id": TELEGRAM_CHANNEL_ID,
         "text": text,
-        "disable_web_page_preview": False,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
     }
 
-    response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
-
-    logging.info("Telegram post sent successfully.")
-
-
-# =========================
-# Main
-# =========================
-
-def main() -> None:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is missing.")
-
-    logging.info("EuroAybar started. MODE=%s | MODEL=%s", MODE, MODEL)
-
-    items = collect_items()
-
-    if MODE == "fx_forecast":
-        post = generate_fx_forecast(items)
-    else:
-        post = generate_news_post(items)
-
-    send_telegram(post)
-
-    logging.info(
-        "Done at %s. Items used: %s",
-        datetime.now(timezone.utc).isoformat(),
-        len(items)
+    response = requests.post(
+        url,
+        data=payload,
+        timeout=REQUEST_TIMEOUT,
     )
+
+    try:
+        response.raise_for_status()
+    except Exception as exc:
+        logging.error("Telegram response: %s", response.text)
+        raise exc
+
+    logging.info("Telegram send done")
+
+
+# =========================
+# POST MODES
+# =========================
+
+def run_analytics():
+    logging.info("Run mode: analytics")
+
+    source_text = collect_sources()
+    post = generate_analytics_post(source_text)
+    send_telegram_message(post)
+
+    logging.info("Analytics post finished successfully")
+
+
+def run_fx_forecast():
+    logging.info("Run mode: fx_forecast")
+
+    source_text = collect_sources()
+    post = generate_fx_forecast_post(source_text)
+    send_telegram_message(post)
+
+    logging.info("FX forecast post finished successfully")
+
+
+# =========================
+# ENTRY POINT
+# =========================
+
+def main():
+    validate_env()
+
+    mode = "analytics"
+
+    if len(sys.argv) >= 2:
+        mode = sys.argv[1].strip().lower()
+
+    logging.info("Selected mode: %s", mode)
+
+    if mode == "analytics":
+        run_analytics()
+
+    elif mode in ["fx", "fx_forecast", "forecast"]:
+        run_fx_forecast()
+
+    else:
+        raise RuntimeError(f"Unknown mode: {mode}")
 
 
 if __name__ == "__main__":
